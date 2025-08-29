@@ -50,7 +50,23 @@ DETECTION_DISTANCE_CM = 7
 
 
 class ParkingLotManager:
+    """
+    Manages the parking lot monitoring system.
+
+    This class handles the video stream from the parking lot camera, performs
+    motion detection to determine parking space occupancy, and updates the
+    LCD display and status LEDs accordingly.
+    """
     def __init__(self, camera_index, led_green, led_red, lcd_display):
+        """
+        Initializes the ParkingLotManager.
+
+        Args:
+            camera_index (int): The index of the camera to use for monitoring.
+            led_green (LED): The green LED object for indicating free spaces.
+            led_red (LED): The red LED object for indicating no free spaces.
+            lcd_display (drivers.Lcd): The LCD display object.
+        """
         self.cap = cv2.VideoCapture(camera_index)
         self.led_green = led_green
         self.led_red = led_red
@@ -60,6 +76,7 @@ class ParkingLotManager:
         self.last_free_count = -1
 
     def cleanup(self):
+        """Releases camera resources and turns off LEDs and LCD."""
         print("Cleaning up ParkingLotManager...")
         try:
             self.lcd.lcd_clear()
@@ -73,6 +90,7 @@ class ParkingLotManager:
         cv2.destroyWindow("Threshold (Debug)")
 
     def update_lcd(self, free_count):
+        """Updates the LCD display with the current number of free spaces."""
         self.lcd.lcd_clear()
         if free_count <= 0:
             self.lcd.lcd_display_string("No empty parking", 1)
@@ -82,6 +100,12 @@ class ParkingLotManager:
             self.lcd.lcd_display_string(f"spaces: {free_count}.", 2)
 
     def setup(self):
+        """
+        Sets up the camera and captures the initial background frame.
+
+        Returns:
+            bool: True if setup is successful, False otherwise.
+        """
         if not self.cap.isOpened():
             print(f"Error: Could not open camera {PARKING_LOT_CAM_INDEX}.")
             return False
@@ -106,6 +130,15 @@ class ParkingLotManager:
         return True
 
     def loop(self):
+        """
+        The main loop for the parking lot monitor.
+
+        It captures frames, processes them for motion, checks parking space
+        occupancy, updates the UI, and displays the results.
+
+        Returns:
+            str: "CONTINUE" to keep the loop running, "STOP" to exit.
+        """
         try:
             ret, frame = self.cap.read()
             if not ret:
@@ -164,9 +197,22 @@ class ParkingLotManager:
 
 
 class LPRManager:
-    """Manages the license plate recognition task."""
+    """
+    Manages the license plate recognition (LPR) task.
+
+    It uses a separate camera to capture frames, extracts a region of interest,
+    and sends it to an EasyOCR worker thread for processing. It also handles
+    access control based on recognized license plates, signaling the GateManager.
+    """
 
     def __init__(self, camera_index, gate_manager):
+        """
+        Initializes the LPRManager.
+
+        Args:
+            camera_index (int): The index of the camera for LPR.
+            gate_manager (GateManager): The gate manager object to control access.
+        """
         self.cap = cv2.VideoCapture(camera_index)
         self.frame_queue = queue.Queue(maxsize=1)
         self.result_queue = queue.Queue()
@@ -178,6 +224,12 @@ class LPRManager:
         self.last_open_time = 0
 
     def ocr_worker(self):
+        """
+        A worker thread for performing OCR on queued frames.
+
+        This thread continuously checks the frame queue for new images and
+        uses EasyOCR to read text, putting the results into the result queue.
+        """
         reader = easyocr.Reader(['en'], gpu=False)
         print("OCR worker thread started.")
         while not self.stop_event.is_set():
@@ -204,6 +256,12 @@ class LPRManager:
         print("OCR worker thread stopped.")
 
     def setup(self):
+        """
+        Starts the OCR worker thread and initializes the LPR camera.
+
+        Returns:
+            bool: True if setup is successful, False otherwise.
+        """
         self.ocr_thread = threading.Thread(target=self.ocr_worker, daemon=True)
         self.ocr_thread.start()
 
@@ -217,6 +275,7 @@ class LPRManager:
         return True
 
     def cleanup(self):
+        """Stops the OCR thread and releases camera resources."""
         print("Cleaning up LPRManager...")
         self.stop_event.set()
         if self.ocr_thread and self.ocr_thread.is_alive():
@@ -226,6 +285,17 @@ class LPRManager:
         cv2.destroyWindow("Fast LPR (Pi 5 Optimized)")
 
     def loop(self):
+        """
+        The main loop for the LPR manager.
+
+        It captures frames, resizes them, periodically sends a region of interest
+        to the OCR thread, and checks the results. If an authorized plate is
+        detected, it triggers the gate to open. It also handles closing the gate
+        after a set duration.
+
+        Returns:
+            str: "CONTINUE" to keep the loop running, "STOP" to exit.
+        """
         ret, frame = self.cap.read()
         if not ret:
             print("Failed to grab frame from LPR camera.")
@@ -271,12 +341,30 @@ class LPRManager:
 
 
 class GateManager:
+    """
+    Manages the physical gate using a servo motor.
+
+    This class handles the initialization of the servo and provides methods
+    to open and close the gate.
+    """
     def __init__(self, servo_pin):
+        """
+        Initializes the GateManager.
+
+        Args:
+            servo_pin (int): The GPIO pin number connected to the servo's signal wire.
+        """
         self.servo_pin = servo_pin
         self.pwm = None
         self.is_open = False
 
     def setup(self):
+        """
+        Initializes the servo motor with PWM control.
+
+        Returns:
+            bool: True if setup is successful, False otherwise.
+        """
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.servo_pin, GPIO.OUT)
@@ -292,31 +380,51 @@ class GateManager:
             return False
 
     def set_angle(self, angle):
+        """
+        Sets the servo's angle based on the provided angle in degrees.
+        """
         duty = angle / 18 + 2
         self.pwm.ChangeDutyCycle(duty)
         time.sleep(0.5)
         self.pwm.ChangeDutyCycle(0)
 
     def open_gate(self):
+        """Moves the servo to the open position."""
         if not self.is_open:
             print("GateManager: Opening gate...")
             self.set_angle(OPEN_POSITION)
             self.is_open = True
 
     def close_gate(self):
+        """Moves the servo to the closed position."""
         if self.is_open:
             print("GateManager: Closing gate...")
             self.set_angle(CLOSE_POSITION)
             self.is_open = False
 
     def cleanup(self):
+        """Stops the PWM and cleans up GPIO."""
         print("GateManager: Cleaning up GPIO...")
         if self.pwm:
             self.pwm.stop()
 
 
 class UltrasonicSensorManager:
+    """
+    Manages the ultrasonic sensor for vehicle detection.
+
+    This class uses a separate thread to continuously measure distance. If an
+    object is detected within a certain range, it signals the gate manager to open.
+    """
     def __init__(self, trig_pin, echo_pin, gate_manager):
+        """
+        Initializes the UltrasonicSensorManager.
+
+        Args:
+            trig_pin (int): The GPIO pin for the sensor's trigger.
+            echo_pin (int): The GPIO pin for the sensor's echo.
+            gate_manager (GateManager): The gate manager object.
+        """
         self.trig_pin = trig_pin
         self.echo_pin = echo_pin
         self.gate_manager = gate_manager
@@ -324,6 +432,12 @@ class UltrasonicSensorManager:
         self.sensor_thread = None
 
     def get_distance(self):
+        """
+        Measures the distance using the ultrasonic sensor.
+
+        Returns:
+            float: The distance in cm, or a large number on timeout.
+        """
         GPIO.output(self.trig_pin, False)
         time.sleep(0.000002)
 
@@ -351,6 +465,12 @@ class UltrasonicSensorManager:
         return distance
 
     def sensor_worker(self):
+        """
+        A worker thread for continuous distance measurement.
+
+        If an object is detected within the threshold, it signals the gate
+        to open.
+        """
         print("UltrasonicSensorManager: Worker thread started.")
         while not self.stop_event.is_set():
             distance = self.get_distance()
@@ -365,6 +485,12 @@ class UltrasonicSensorManager:
         print("UltrasonicSensorManager: Worker thread stopped.")
 
     def setup(self):
+        """
+        Initializes GPIO pins and starts the sensor worker thread.
+
+        Returns:
+            bool: True if setup is successful, False otherwise.
+        """
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.trig_pin, GPIO.OUT)
@@ -378,6 +504,7 @@ class UltrasonicSensorManager:
             return False
 
     def cleanup(self):
+        """Stops the sensor thread."""
         print("Cleaning up UltrasonicSensorManager...")
         self.stop_event.set()
         if self.sensor_thread and self.sensor_thread.is_alive():
@@ -386,11 +513,26 @@ class UltrasonicSensorManager:
 
 # --- Main Manager Class ---
 class MainManager:
+    """
+    The central orchestrator for the entire smart parking system.
+
+    This class initializes all component managers (ParkingLotManager, LPRManager,
+    GateManager, UltrasonicSensorManager), handles their setup and cleanup, and
+    runs the main application loop. It also manages signal handling for graceful
+    shutdown.
+    """
     def __init__(self):
         self.stop_event = threading.Event()
         self.all_managers = []
+        self.loop_managers = []
 
     def run(self):
+        """
+        The main entry point for the application.
+
+        It registers cleanup functions, sets up signal handlers, initializes all
+        component managers, and starts the main application loop.
+        """
         atexit.register(self.cleanup)
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda s, f: self.stop_event.set())
@@ -426,6 +568,12 @@ class MainManager:
             self.cleanup()
 
     def cleanup(self):
+        """
+        Performs a graceful shutdown of all managers and GPIO.
+
+        This method is called on exit to ensure all resources are properly
+        released, threads are stopped, and GPIO is cleaned up.
+        """
         if not self.stop_event.is_set():
             self.stop_event.set()
 
